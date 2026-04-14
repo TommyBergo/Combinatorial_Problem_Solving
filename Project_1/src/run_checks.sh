@@ -2,7 +2,7 @@
 
 #Usage: ./run_checks.sh
 CHECKER="./checker"
-INPUT_DIR="./out" 
+INPUT_DIR="../out" 
 
 if [[ ! -x "$CHECKER" ]]; then
     echo "Error: $CHECKER not found or is not executable."
