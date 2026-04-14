@@ -19,7 +19,6 @@ private:
     vector<vector<int>> d_init;   // Minimum Initial Distances
     IntVar converted;             // Total number of two-way streets converted
     BoolVarArray x;               // The x[n*i + j] = 1 if the corresponding street (in this way) is active.
-    // d[(k)*n*n + i*n + j] = shortest distance from i to j using only nodes 0..k-1 as intermediates (Floyd-Warshall layers)
     IntVarArray d;
 
 public:
@@ -87,15 +86,10 @@ public:
         // Link variable conv_flags with variable converted
         linear(*this, conv_flags, IRT_EQ, converted);
 
-        // ---------------------------------------------------------------
-        // Distance modelling via symbolic Floyd-Warshall (layered approach)
-        // d[k*n*n + i*n + j] = shortest distance from i to j
-        //                       using only nodes 0..k-1 as intermediates.
-        //
-        // This avoids the circular dependencies that made Bellman-Ford
-        // unworkable inside Gecode: each layer k depends only on layer k-1,
-        // so there is no circularity and propagation works correctly.
-        // ---------------------------------------------------------------
+        // Distance Modelling using Floyd-Warshall alogirthm
+        // d[k*n*n + i*n + j] = shortest distance from i to j using only nodes 0..k-1 as intermediates.
+
+        // I'M USING A RECURRENT FUNCTION  !!
 
         // Base case (k = 0): only direct arcs, no intermediates allowed.
         for (int i = 0; i < n; i++)
@@ -109,7 +103,7 @@ public:
                 }
                 else if (t_matrix[i][j] == -1)
                 {
-                    // No direct arc i->j exists at all: distance is INF regardless.
+                    // No direct arc i->j exists at all -> distance is INF.
                     rel(*this, d[base_idx] == INF);
                 }
                 else
@@ -123,31 +117,38 @@ public:
             }
         }
 
-        // Recurrence: for each intermediate node k (0-indexed),
-        //   d[(k+1)*n*n + i*n + j] = min( d[k*n*n + i*n + j],
-        //                                  d[k*n*n + i*n + k] + d[k*n*n + k*n + j] )
-        // where the sum is treated as INF whenever either addend is INF.
+        // Recurrence: for each intermediate node k, d[(k+1)*n*n + i*n + j] = min( d[k*n*n + i*n + j], d[k*n*n + i*n + k] + d[k*n*n + k*n + j] )
         for (int k = 0; k < n; k++)
         {
             for (int i = 0; i < n; i++)
             {
                 for (int j = 0; j < n; j++)
                 {
-                    int cur  = (k + 1) * n * n + i * n + j; // layer k+1
-                    int prev = k * n * n + i * n + j;        // d[k][i][j]
-                    int ik   = k * n * n + i * n + k;        // d[k][i][k]
-                    int kj   = k * n * n + k * n + j;        // d[k][k][j]
+                    int cur = (k + 1) * n * n + i * n + j; // layer k+1
+                    int prev = k * n * n + i * n + j;      // d[k][i][j]
+                    int ik = k * n * n + i * n + k;        // d[k][i][k]
+                    int kj = k * n * n + k * n + j;        // d[k][k][j]
 
-                    // Auxiliary variable for the path cost going through k.
-                    // We cap the domain at INF to avoid integer overflow.
+                    // Skip trivial diagonal entries: distance from i to i is always 0
+                    if (i == j)
+                    {
+                        rel(*this, d[cur] == 0);
+                        continue;
+                    }
+
+                    // If i==k or k==j, through_k path is the same as d[k][i][j] (going i->k->k->j collapses)
+                    // so we can skip creating through_k for those cases
+                    if (i == k || k == j)
+                    {
+                        rel(*this, d[cur] == d[prev]);
+                        continue;
+                    }
+
                     IntVar through_k(*this, 0, INF);
 
-                    // If either leg is INF the combined path is impossible (INF).
-                    // Otherwise it equals the sum of the two legs.
-                    rel(*this,
-                        ((d[ik] == INF) || (d[kj] == INF)) >> (through_k == INF));
-                    rel(*this,
-                        ((d[ik] != INF) && (d[kj] != INF)) >> (through_k == d[ik] + d[kj]));
+                    // the sum is treated as INF whenever one of the addend is INF.
+                    rel(*this, ((d[ik] == INF) || (d[kj] == INF)) >> (through_k == INF));
+                    rel(*this, ((d[ik] != INF) && (d[kj] != INF)) >> (through_k == d[ik] + d[kj]));
 
                     // d[k+1][i][j] = min of going directly (prev) or through k.
                     rel(*this, d[cur] == Gecode::min(d[prev], through_k));
@@ -155,9 +156,7 @@ public:
             }
         }
 
-        // Threshold constraint on the final layer (k = n):
-        // for every reachable pair (i,j) in the original graph,
-        // the new shortest distance must not exceed d_init[i][j] * (100+p) / 100.
+        // Threshold constraint on the final layer (k = n)
         for (int i = 0; i < n; i++)
         {
             for (int j = 0; j < n; j++)
@@ -170,7 +169,7 @@ public:
             }
         }
 
-        branch(*this, x, BOOL_VAR_NONE(), BOOL_VAL_MIN());
+        branch(*this, x, BOOL_VAR_DEGREE_MAX(), BOOL_VAL_MIN());
     }
 
     StreetDirectionality(StreetDirectionality &s) : Space(s), n(s.n), p(s.p), t_matrix(s.t_matrix), d_init(s.d_init)
