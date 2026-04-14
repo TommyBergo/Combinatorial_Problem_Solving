@@ -7,8 +7,8 @@ all: sdp checker
 sdp: sdp.cpp
 	$(CC) $(CFLAGS) -o sdp sdp.cpp $(LIBS)
 
-checker: checker.cpp
-	$(CC) $(CFLAGS) -o checker checker.cpp
+checker: checker.cc
+	$(CC) $(CFLAGS) -o checker checker.cc
 
 clean:
 	rm -f sdp checker
