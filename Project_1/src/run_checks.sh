@@ -1,8 +1,8 @@
 #!/bin/bash
 
-#Usage: ./run_checks.sh
-CHECKER="./checker"
-INPUT_DIR="../out" 
+# Usage: ./run_checks.sh <checker_executable> <output_dir>
+CHECKER=${1:-./checker}
+INPUT_DIR=${2:-../out} 
 
 if [[ ! -x "$CHECKER" ]]; then
     echo "Error: $CHECKER not found or is not executable."
@@ -14,7 +14,7 @@ if [[ ! -d "$INPUT_DIR" ]]; then
     exit 1
 fi
 
-echo "Running validation..."
+echo "Running validation using $CHECKER on directory $INPUT_DIR..."
 echo "------------------------------------------------"
 
 failed_files=()
