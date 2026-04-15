@@ -12,9 +12,11 @@ The project is organized into the following directories:
     - `sdp.cpp`: The single C++ source file containing the Gecode model.
     - `Makefile`: Script for compiling the project.
     - `run_all.sh`: A bash script that runs the `sdp` executable over all files in a directory to produce output files.
-        Usage: ./run_all.sh <input_file> <solver> <output_dir>
+        ```bash
+      ./run_all.sh <input_file> <solver> <output_dir>
     - `run_checks.sh`: A script to verify each output file in the `out/` directory using the provided checker.
-        Usage: ./run_checks.sh <checker_executable> <output_dir>
+        ```bash
+         ./run_checks.sh <checker_executable> <output_dir>
     - `checker.cc`: The sanity check utility provided by the professor.
 
 ## Compilation Instructions
