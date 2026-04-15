@@ -13,7 +13,7 @@ The project is organized into the following directories:
     - `Makefile`: Script for compiling the project.
     - `run_all.sh`: A bash script that runs the `sdp` executable over all files in a directory to produce output files.
         ```bash
-      ./run_all.sh <input_file> <solver> <output_dir>
+      ./run_all.sh <input_dir> <solver> <output_dir>
     - `run_checks.sh`: A script to verify each output file in the `out/` directory using the provided checker.
         ```bash
          ./run_checks.sh <checker_executable> <output_dir>
