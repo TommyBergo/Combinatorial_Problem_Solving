@@ -5,11 +5,11 @@ This project addresses the Street Directionality Problem using Constraint Progra
 It is required to execute the code in a Linux environment, with the g++ compiler and Gecode library installed
 
 ## Content
-The project is organized into the following directories:
+The project is organized as follows:
 
 - **out/**: Contains the output files for the instances that were solved optimally.
 - **src/**: Contains the source code and utility scripts:
-    - `sdp.cpp`: The single C++ source file containing the Gecode model.
+    - `sdp.cpp`: The C++ file containing the model.
     - `Makefile`: Script for compiling the project.
     - `run_all.sh`: A bash script that runs the `sdp` executable over all files in a directory to produce output files.
         ```bash
@@ -18,9 +18,11 @@ The project is organized into the following directories:
         ```bash
          ./run_checks.sh <checker_executable> <output_dir>
     - `checker.cc`: The sanity check utility provided by the professor.
+-**Report.pdf**: A written report of this project. 
+
+
 
 ## Compilation Instructions
 To compile both the solver and the checker, navigate to the `src` directory and run:
 ```bash
 make
-
