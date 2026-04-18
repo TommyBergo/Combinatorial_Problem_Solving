@@ -19,7 +19,7 @@ private:
     vector<vector<int>> d_init;   // Minimum Initial Distances
     IntVar converted;             // Total number of two-way streets converted
     BoolVarArray x;               // The x[n*i + j] = 1 if the corresponding street (in this way) is active.
-    IntVarArray d;
+    IntVarArray d;                // new distances 
 
 public:
     StreetDirectionality(int nn, int pp, const vector<vector<int>> &tt) : n(nn), p(pp), t_matrix(tt),
@@ -86,8 +86,8 @@ public:
         // Link variable conv_flags with variable converted
         linear(*this, conv_flags, IRT_EQ, converted);
 
-        // Distance Modelling using Floyd-Warshall alogirthm
-        // d[k*n*n + i*n + j] = shortest distance from i to j using only nodes 0..k-1 as intermediates.
+        // Distance modelling using Floyd-Warshall alogirthm
+        // d[k*n*n + i*n + j] = shortest distance from i to j.
 
         // I'M USING A RECURRENT FUNCTION  !!
 
@@ -117,7 +117,7 @@ public:
             }
         }
 
-        // Recurrence: for each intermediate node k, d[(k+1)*n*n + i*n + j] = min( d[k*n*n + i*n + j], d[k*n*n + i*n + k] + d[k*n*n + k*n + j] )
+        // General case: for each intermediate node k, d[(k+1)*n*n + i*n + j] = min( d[k*n*n + i*n + j], d[k*n*n + i*n + k] + d[k*n*n + k*n + j] )
         for (int k = 0; k < n; k++)
         {
             for (int i = 0; i < n; i++)
@@ -129,15 +129,14 @@ public:
                     int ik = k * n * n + i * n + k;        // d[k][i][k]
                     int kj = k * n * n + k * n + j;        // d[k][k][j]
 
-                    // Skip trivial diagonal entries: distance from i to i is always 0
+                    // skip diagonal entries because distance from i to i is always 0
                     if (i == j)
                     {
                         rel(*this, d[cur] == 0);
                         continue;
                     }
 
-                    // If i==k or k==j, through_k path is the same as d[k][i][j] (going i->k->k->j collapses)
-                    // so we can skip creating through_k for those cases
+                    // If i==k or k==j then through_k path is the same as d[k][i][j] so we can skip creating through_k for those cases (save time)
                     if (i == k || k == j)
                     {
                         rel(*this, d[cur] == d[prev]);
@@ -156,7 +155,7 @@ public:
             }
         }
 
-        // Threshold constraint on the final layer (k = n)
+        // threshold constraint on the final layer (k = n)
         for (int i = 0; i < n; i++)
         {
             for (int j = 0; j < n; j++)
