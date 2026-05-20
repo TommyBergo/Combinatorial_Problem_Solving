@@ -1,266 +1,217 @@
-#include <fstream>
+#include <ilcplex/ilocplex.h>
 #include <vector>
-#include <gecode/int.hh>
-#include <gecode/minimodel.hh>
-#include <gecode/search.hh>
+#include <iostream>
+#include <string>
+#include <cassert>
+#include <algorithm>
 
-using namespace std;
-using namespace Gecode;
+ILOSTLBEGIN
 
-const int INF = 10000;
+int n;
+int p;
+const double INF = 1e7;      
+const double BIG_M = 1e5;    // Ridotto leggermente per evitare overflow nelle somme D[ik] + D[kj]
 
-class StreetDirectionality : public Space
-{
+vector<vector<int>> t_matrix;
+vector<vector<int>> d_init;
 
-private:
-    int n;                        // number of crossings
-    int p;                        // percentage
-    vector<vector<int>> t_matrix; // time matrix
-    vector<vector<int>> d_init;   // Minimum Initial Distances
-    IntVar converted;             // Total number of two-way streets converted
-    BoolVarArray x;               // The x[n*i + j] = 1 if the corresponding street (in this way) is active.
-    IntVarArray d;                // new distances 
+IloNumVarArray X; 
+IloNumVarArray D; 
 
-public:
-    StreetDirectionality(int nn, int pp, const vector<vector<int>> &tt) : n(nn), p(pp), t_matrix(tt),
-                                                                          x(*this, n * n, 0, 1),
-                                                                          d(*this, (n + 1) * n * n, 0, INF),
-                                                                          converted(*this, 0, n * n)
-    {
-        // Computing initial distances for threshold reference
-        d_init.assign(n, vector<int>(n, INF));
-        for (int i = 0; i < n; ++i)
-        {
-            d_init[i][i] = 0;
-            for (int j = 0; j < n; ++j)
-            {
-                if (t_matrix[i][j] != -1)
-                    d_init[i][j] = t_matrix[i][j];
+int idxX(int i, int j) { return i * n + j; }
+int idxD(int k, int i, int j) { return k * n * n + i * n + j; }
+
+void compute_initial_distances() {
+    d_init.assign(n, vector<int>(n, (int)INF));
+    for (int i = 0; i < n; ++i) {
+        d_init[i][i] = 0;
+        for (int j = 0; j < n; ++j) {
+            if (t_matrix[i][j] != -1) {
+                d_init[i][j] = t_matrix[i][j];
+            }
+        }
+    }
+    for (int k = 0; k < n; ++k) {
+        for (int i = 0; i < n; ++i) {
+            for (int j = 0; j < n; ++j) {
+                if (d_init[i][k] != (int)INF && d_init[k][j] != (int)INF) {
+                    d_init[i][j] = std::min(d_init[i][j], d_init[i][k] + d_init[k][j]);
+                }
+            }
+        }
+    }
+}
+
+int main (int argc, char* argv[]) {
+    if (!(cin >> n)) return 0;
+
+    t_matrix.assign(n, vector<int>(n));
+    for (int i = 0; i < n; ++i) {
+        for (int j = 0; j < n; ++j) {
+            cin >> t_matrix[i][j];
+        }
+    }
+    cin >> p;
+
+    compute_initial_distances();
+
+    IloEnv env;
+    try {
+        IloModel model(env);
+
+        X = IloNumVarArray(env, n * n, 0, 1, ILOBOOL);
+        // Bound superiore elevato per accogliere le somme Big-M stratificate senza andare in out-of-bound
+        D = IloNumVarArray(env, (n + 1) * n * n, 0, BIG_M * 10, ILOFLOAT);
+
+        for (int i = 0; i < n; ++i) {
+            for (int j = 0; j < n; ++j) {
+                string s_x = "x_" + to_string(i) + "_" + to_string(j);
+                X[idxX(i, j)].setName(s_x.c_str());
             }
         }
 
-        for (int k = 0; k < n; ++k)
-            for (int i = 0; i < n; ++i)
-                for (int j = 0; j < n; ++j)
-                    if (d_init[i][k] != INF && d_init[k][j] != INF)
-                        d_init[i][j] = min(d_init[i][j], d_init[i][k] + d_init[k][j]);
-
-        // Count two-way streets to size conv_flags
-        int count_two_way = 0;
-        for (int i = 0; i < n; i++)
-            for (int j = i + 1; j < n; j++)
-                if (t_matrix[i][j] > 0 && t_matrix[j][i] > 0)
-                    count_two_way++;
-
-        BoolVarArgs conv_flags(*this, count_two_way, 0, 1);
-        int current_f = 0;
-
-        for (int i = 0; i < n; ++i)
-        {
-            for (int j = 0; j < n; ++j)
-            {
-                int idx = i * n + j;
-                int rev_idx = j * n + i;
-
-                if (t_matrix[i][j] == -1)
-                {
-                    // Street i->j does not exist
-                    rel(*this, x[idx] == 0);
-                }
-                else if (t_matrix[j][i] == -1)
-                {
-                    // Street i->j is already one-way (j->i does not exist):
-                    rel(*this, x[idx] == 1);
-                }
-                else if (i < j)
-                {
-                    // Street {i,j} is two-way, at least one of the two directions must remain active to preserve connectivity
-                    rel(*this, x[idx] + x[rev_idx] >= 1);
-                    // conv_flags marks this two-way street as "converted to one-way"
-                    rel(*this, conv_flags[current_f] == (x[idx] ^ x[rev_idx]));
-                    current_f++;
+        for (int k = 0; k <= n; ++k) {
+            for (int i = 0; i < n; ++i) {
+                for (int j = 0; j < n; ++j) {
+                    string s_d = "d_" + to_string(k) + "_" + to_string(i) + "_" + to_string(j);
+                    D[idxD(k, i, j)].setName(s_d.c_str());
                 }
             }
         }
 
-        // Link variable conv_flags with variable converted
-        linear(*this, conv_flags, IRT_EQ, converted);
+        IloExpr obj_expr(env);
+        IloNumVarArray conv_flags(env);
 
-        // Distance modelling using Floyd-Warshall alogirthm
-        // d[k*n*n + i*n + j] = shortest distance from i to j.
-
-        // I'M USING A RECURRENT FUNCTION  !!
-
-        // Base case (k = 0): only direct arcs, no intermediates allowed.
-        for (int i = 0; i < n; i++)
-        {
-            for (int j = 0; j < n; j++)
-            {
-                int base_idx = 0 * n * n + i * n + j;
-                if (i == j)
-                {
-                    rel(*this, d[base_idx] == 0);
+        for (int i = 0; i < n; ++i) {
+            for (int j = i + 1; j < n; ++j) {
+                if (t_matrix[i][j] > 0 && t_matrix[j][i] > 0) {
+                    IloNumVar c_ij(env, 0, 1, ILOBOOL);
+                    conv_flags.add(c_ij);
+                    
+                    model.add(c_ij <= 2 - X[idxX(i, j)] - X[idxX(j, i)]);
+                    model.add(c_ij >= X[idxX(i, j)] - X[idxX(j, i)]);
+                    model.add(c_ij >= X[idxX(j, i)] - X[idxX(i, j)]);
+                    
+                    obj_expr += c_ij;
                 }
-                else if (t_matrix[i][j] == -1)
-                {
-                    // No direct arc i->j exists at all -> distance is INF.
-                    rel(*this, d[base_idx] == INF);
+            }
+        }
+        model.add(IloMaximize(env, obj_expr));
+        obj_expr.end();
+
+        for (int i = 0; i < n; ++i) {
+            for (int j = 0; j < n; ++j) {
+                if (t_matrix[i][j] == -1) {
+                    model.add(X[idxX(i, j)] == 0);
                 }
-                else
-                {
-                    // Arc i->j exists in the input.
-                    // If x[i][j] == 1 (arc is active): cost is t_matrix[i][j].
-                    // If x[i][j] == 0 (arc was two-way and has been deactivated): cost is INF.
-                    rel(*this, (x[i * n + j] >> (d[base_idx] == t_matrix[i][j])) &&
-                                   (!x[i * n + j] >> (d[base_idx] == INF)));
+                else if (t_matrix[j][i] == -1) {
+                    model.add(X[idxX(i, j)] == 1);
+                }
+                else if (i < j) {
+                    model.add(X[idxX(i, j)] + X[idxX(j, i)] >= 1);
                 }
             }
         }
 
-        // General case: for each intermediate node k, d[(k+1)*n*n + i*n + j] = min( d[k*n*n + i*n + j], d[k*n*n + i*n + k] + d[k*n*n + k*n + j] )
-        for (int k = 0; k < n; k++)
-        {
-            for (int i = 0; i < n; i++)
-            {
-                for (int j = 0; j < n; j++)
-                {
-                    int cur = (k + 1) * n * n + i * n + j; // layer k+1
-                    int prev = k * n * n + i * n + j;      // d[k][i][j]
-                    int ik = k * n * n + i * n + k;        // d[k][i][k]
-                    int kj = k * n * n + k * n + j;        // d[k][k][j]
+        for (int i = 0; i < n; ++i) {
+            for (int j = 0; j < n; ++j) {
+                int base_idx = idxD(0, i, j);
+                if (i == j) {
+                    model.add(D[base_idx] == 0);
+                }
+                else if (t_matrix[i][j] == -1) {
+                    model.add(D[base_idx] == BIG_M);
+                }
+                else {
+                    model.add(D[base_idx] >= t_matrix[i][j]);
+                    model.add(D[base_idx] >= BIG_M * (1 - X[idxX(i, j)]));
+                    model.add(D[base_idx] <= t_matrix[i][j] + (BIG_M - t_matrix[i][j]) * (1 - X[idxX(i, j)]));
+                }
+            }
+        }
 
-                    // skip diagonal entries because distance from i to i is always 0
-                    if (i == j)
-                    {
-                        rel(*this, d[cur] == 0);
+        for (int k = 0; k < n; ++k) {
+            for (int i = 0; i < n; ++i) {
+                for (int j = 0; j < n; ++j) {
+                    int cur = idxD(k + 1, i, j);
+                    int prev = idxD(k, i, j);
+                    int ik = idxD(k, i, k);
+                    int kj = idxD(k, k, j);
+
+                    if (i == j) {
+                        model.add(D[cur] == 0);
+                        continue;
+                    }
+                    if (i == k || k == j) {
+                        model.add(D[cur] == D[prev]);
                         continue;
                     }
 
-                    // If i==k or k==j then through_k path is the same as d[k][i][j] so we can skip creating through_k for those cases (save time)
-                    if (i == k || k == j)
-                    {
-                        rel(*this, d[cur] == d[prev]);
-                        continue;
-                    }
+                    model.add(D[cur] <= D[prev]);
+                    model.add(D[cur] <= D[ik] + D[kj]);
 
-                    IntVar through_k(*this, 0, INF);
-
-                    // the sum is treated as INF whenever one of the addend is INF.
-                    rel(*this, ((d[ik] == INF) || (d[kj] == INF)) >> (through_k == INF));
-                    rel(*this, ((d[ik] != INF) && (d[kj] != INF)) >> (through_k == d[ik] + d[kj]));
-
-                    // d[k+1][i][j] = min of going directly (prev) or through k.
-                    rel(*this, d[cur] == Gecode::min(d[prev], through_k));
+                    IloNumVar selector_w(env, 0, 1, ILOBOOL);
+                    // La penalità deve coprire il massimo valore potenziale di (D[ik] + D[kj])
+                    model.add(D[cur] >= D[prev] - (BIG_M * 4) * selector_w);
+                    model.add(D[cur] >= (D[ik] + D[kj]) - (BIG_M * 4) * (1 - selector_w));
                 }
             }
         }
 
-        // threshold constraint on the final layer (k = n)
-        for (int i = 0; i < n; i++)
-        {
-            for (int j = 0; j < n; j++)
-            {
-                if (i != j && d_init[i][j] < INF)
-                {
-                    int final_idx = n * n * n + i * n + j;
-                    rel(*this, d[final_idx] * 100 <= d_init[i][j] * (100 + p));
+        for (int i = 0; i < n; ++i) {
+            for (int j = 0; j < n; ++j) {
+                if (i != j && d_init[i][j] < (int)INF) {
+                    int final_idx = idxD(n, i, j);
+                    model.add(D[final_idx] * 100.0 <= d_init[i][j] * (100 + p));
                 }
             }
         }
 
-        branch(*this, x, BOOL_VAR_DEGREE_MAX(), BOOL_VAL_MIN());
-    }
+        IloCplex cplex(model);
+        cplex.setOut(env.getNullStream());
+        
+        if (!cplex.solve()) {
+            cerr << "Error: The model is infeasible with the current constraints setup." << endl;
+            env.end();
+            return 1;
+        }
 
-    StreetDirectionality(StreetDirectionality &s) : Space(s), n(s.n), p(s.p), t_matrix(s.t_matrix), d_init(s.d_init)
-    {
-        x.update(*this, s.x);
-        converted.update(*this, s.converted);
-        d.update(*this, s.d);
-    }
-
-    virtual Space *copy()
-    {
-        return new StreetDirectionality(*this);
-    }
-
-    // forces next solution to be strictly better than the current best
-    virtual void constrain(const Space &b)
-    {
-        const StreetDirectionality &sb = static_cast<const StreetDirectionality &>(b);
-        rel(*this, converted > sb.converted);
-    }
-
-    void print(vector<vector<int>> &t_mat, int perc) const
-    {
-        // Copy of input
         cout << n << "\n";
-        for (int i = 0; i < n; i++)
-        {
-            for (int j = 0; j < n; j++)
-            {
-                cout << t_mat[i][j];
-                if (j < n - 1)
-                    cout << " ";
+        for (int i = 0; i < n; ++i) {
+            for (int j = 0; j < n; ++j) {
+                cout << t_matrix[i][j];
+                if (j < n - 1) cout << " ";
             }
             cout << "\n";
         }
-        cout << perc << "\n";
+        cout << p << "\n";
 
-        // Print converted streets
-        for (int i = 0; i < n; i++)
-            for (int j = i + 1; j < n; j++)
-                if (t_mat[i][j] > 0 && t_mat[j][i] > 0)
-                {
-                    if (x[i * n + j].val() == 1 && x[j * n + i].val() == 0)
+        for (int i = 0; i < n; ++i) {
+            for (int j = i + 1; j < n; ++j) {
+                if (t_matrix[i][j] > 0 && t_matrix[j][i] > 0) {
+                    int val_ij = IloRound(cplex.getValue(X[idxX(i, j)]));
+                    int val_ji = IloRound(cplex.getValue(X[idxX(j, i)]));
+                    if (val_ij == 1 && val_ji == 0) {
                         cout << i << " " << j << "\n";
-                    else if (x[j * n + i].val() == 1 && x[i * n + j].val() == 0)
+                    } else if (val_ji == 1 && val_ij == 0) {
                         cout << j << " " << i << "\n";
+                    }
                 }
-
-        // Total number of converted streets
-        cout << converted.val() << "\n";
-    }
-};
-
-int main(int argc, char *argv[])
-{
-    try
-    {
-        // Read input from stdin
-        int n, p;
-        cin >> n;
-        vector<vector<int>> t(n, vector<int>(n));
-        for (int i = 0; i < n; i++)
-            for (int j = 0; j < n; j++)
-                cin >> t[i][j];
-        cin >> p;
-
-        // Model
-        StreetDirectionality *model = new StreetDirectionality(n, p, t);
-        BAB<StreetDirectionality> engine(model);
-        delete model;
-
-        StreetDirectionality *best = nullptr;
-        while (StreetDirectionality *sol = engine.next())
-        {
-            delete best;
-            best = sol;
+            }
         }
 
-        if (best)
-        {
-            best->print(t, p);
-            delete best;
-        }
-        else
-        {
-            cerr << "No solution found.\n";
-        }
-    }
-    catch (Exception e)
-    {
-        cerr << "Gecode exception: " << e.what() << endl;
+        cout << IloRound(cplex.getObjValue()) << "\n";
+
+    } catch (IloException& e) {
+        cerr << "CPLEX Concert Exception caught: " << e << endl;
+        env.end();
+        return 1;
+    } catch (...) {
+        cerr << "Unknown exception caught." << endl;
+        env.end();
         return 1;
     }
+
+    env.end();
     return 0;
 }
