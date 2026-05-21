@@ -1,5 +1,6 @@
-CPLEXDIR      = /opt/ibm/ILOG/CPLEX_Studio_Community2212/cplex
-CONCOPTDIR    = /opt/ibm/ILOG/CPLEX_Studio_Community2212/concert
+CPLEXSTUDIODIR = /opt/ibm/ILOG/CPLEX_Studio2212
+CPLEXDIR       = $(CPLEXSTUDIODIR)/cplex
+CONCOPTDIR     = $(CPLEXSTUDIODIR)/concert
 
 SYSTEM        = x86-64_linux
 LIBFORMAT     = static_pic
@@ -10,13 +11,13 @@ CPLEXLIBDIR   = $(CPLEXDIR)/lib/$(SYSTEM)/$(LIBFORMAT)
 CONCERTLIBDIR = $(CONCOPTDIR)/lib/$(SYSTEM)/$(LIBFORMAT)
 
 CCFLAGS       = -DIL_STD -I$(CPLEXDIR)/include -I$(CONCOPTDIR)/include
-CCLNDIRS      = -L$(CPLEXDIR)/lib/$(SYSTEM)/$(LIBFORMAT) -L$(CONCOPTDIR)/lib/$(SYSTEM)/$(LIBFORMAT)
-CCLNFLAGS     = -lconcert -lilocplex -lcplex -lm -lpthread -ldl
+CCLNDIRS      = -L$(CPLEXLIBDIR) -L$(CONCERTLIBDIR)
+CCLNFLAGS     = -lilocplex -lconcert -lcplex -lm -lpthread -ldl
 
 all: program checker
 
 program: sdp.o
-	$(CXX) $(CCFLAGS) $(CCLNDIRS) -o program sdp.o $(CCLNFLAGS)
+	$(CXX) $(CCFLAGS) $(CCLNDIRS) sdp.o -o program $(CCLNFLAGS)
 
 sdp.o: sdp.cpp
 	$(CXX) -c $(CCFLAGS) sdp.cpp -o sdp.o
