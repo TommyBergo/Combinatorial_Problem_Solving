@@ -1,5 +1,5 @@
 CXX      = g++ -O3 -std=c++11
-KISSAT_DIR = ../solvers/kissat
+KISSAT_DIR = ../src/kissat
 
 all: kissat_solver sdp checker
 

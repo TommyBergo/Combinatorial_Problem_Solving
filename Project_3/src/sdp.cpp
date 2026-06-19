@@ -1,220 +1,300 @@
-#include <ilcplex/ilocplex.h>
-#include <vector>
 #include <iostream>
-#include <string>
+#include <fstream>
+#include <vector>
 #include <algorithm>
+#include <assert.h>
+#include <stdlib.h>
 
-ILOSTLBEGIN
+#define V +
 
+using namespace std;
 
-//Data structures
+const int INF = 1e7;
 int n;
 int p;
-const double INF = 1e7;      
-const double BIG_M = 1e4;   
-vector<vector<int>> t_matrix;
-vector<vector<int>> d_init;
-IloNumVarArray X; 
-IloNumVarArray D; 
+int n_vars;
+int n_clauses;
+int max_allowed_dist = 0;
 
-// Flattening 2D coordinates into a 1D index for the street decision variables
-int idxX(int i, int j) { return i * n + j; }
-// Flattening 3D coordinates (k, i, j) into a 1D index for the Floyd-Warshall DP variables
-int idxD(int k, int i, int j) { return k * n * n + i * n + j; }
+vector<vector<int> > t_matrix;
+vector<vector<int> > d_init;
+vector<pair<int,int> > two_way_streets;
 
-// Classic Floyd-Warshall algorithm (as we did for the previouse assignment) to get the base shortest path distances before any changes
-void compute_initial_distances() {
-    d_init.assign(n, vector<int>(n, (int)INF));
-    for (int i = 0; i < n; ++i) {
-        d_init[i][i] = 0;
-        for (int j = 0; j < n; ++j) {
-            if (t_matrix[i][j] != -1) {
-                d_init[i][j] = t_matrix[i][j];
-            }
-        }
-    }
-    for (int k = 0; k < n; ++k) {
-        for (int i = 0; i < n; ++i) {
-            for (int j = 0; j < n; ++j) {
-                if (d_init[i][k] != (int)INF && d_init[k][j] != (int)INF) {
-                    d_init[i][j] = std::min(d_init[i][j], d_init[i][k] + d_init[k][j]);
-                }
-            }
-        }
-    }
+vector<vector<int> > x_edge_var;
+vector<vector<vector<int> > > reach_var;
+
+ofstream cnf;
+ifstream sol;
+
+typedef string literal;
+typedef string clause;
+
+// flip the literal string for negation
+literal operator-(const literal& lit) {
+  if (lit[0] == '-') return lit.substr(1);
+  else                return "-" + lit;
 }
 
-int main (int argc, char* argv[]) {
-    // ggetting data from standard input
-    if (!(cin >> n)) return 0;
+// helper to format variable IDs
+literal get_lit(int var_id) {
+  return to_string(var_id) + " ";
+}
 
-    t_matrix.assign(n, vector<int>(n));
-    for (int i = 0; i < n; ++i) {
-        for (int j = 0; j < n; ++j) {
-            cin >> t_matrix[i][j];
-        }
+// write clause to file and increment counter
+void add_clause(const clause& c) {
+  cnf << c << "0" << endl;
+  ++n_clauses;
+}
+
+// sequential counter for the cardinality constraint
+void encode_at_least_k(const vector<int>& vars, int k) {
+  if (k <= 0) return;
+  int n_cards = vars.size();
+  if (k > n_cards) {
+    add_clause("1 ");
+    add_clause("-1 ");
+    return;
+  }
+
+  vector<vector<int> > s(n_cards, vector<int>(k + 1, 0));
+  for (int i = 0; i < n_cards; ++i)
+    for (int j = 1; j <= k; ++j)
+      s[i][j] = ++n_vars;
+
+  add_clause(-get_lit(vars[0]) V get_lit(s[0][1]));
+  add_clause(-get_lit(s[0][1]) V get_lit(vars[0]));
+  for (int j = 2; j <= k; ++j) add_clause(-get_lit(s[0][j]));
+
+  for (int i = 1; i < n_cards; ++i) {
+    add_clause(-get_lit(vars[i]) V get_lit(s[i][1]));
+    add_clause(-get_lit(s[i-1][1]) V get_lit(s[i][1]));
+    add_clause(-get_lit(s[i][1]) V get_lit(vars[i]) V get_lit(s[i-1][1]));
+    for (int j = 2; j <= k; ++j) {
+      add_clause(-get_lit(s[i-1][j]) V get_lit(s[i][j]));
+      add_clause(-get_lit(vars[i]) V -get_lit(s[i-1][j-1]) V get_lit(s[i][j]));
+      add_clause(-get_lit(s[i][j]) V get_lit(s[i-1][j]) V get_lit(s[i-1][j-1]));
+      add_clause(-get_lit(s[i][j]) V get_lit(s[i-1][j]) V get_lit(vars[i]));
     }
-    cin >> p;
+  }
+  add_clause(get_lit(s[n_cards-1][k]));
+}
 
-    compute_initial_distances();
+// floyd-warshall as we did for the ILP part to compute the initial distnaces
+void compute_initial_distances() {
+  d_init.assign(n, vector<int>(n, INF));
+  for (int i = 0; i < n; ++i) {
+    d_init[i][i] = 0;
+    for (int j = 0; j < n; ++j)
+      if (t_matrix[i][j] != -1) d_init[i][j] = t_matrix[i][j];
+  }
+  for (int k = 0; k < n; ++k)
+    for (int i = 0; i < n; ++i)
+      for (int j = 0; j < n; ++j)
+        if (d_init[i][k] != INF && d_init[k][j] != INF)
+          d_init[i][j] = min(d_init[i][j], d_init[i][k] + d_init[k][j]);
+}
 
-    IloEnv env;
-    try {
-        IloModel model(env);
+// build the entire cnf formula for a given target
+void write_CNF_with_target(int target_conversions) {
+  n_clauses = 0;
+  n_vars = 0;
+  
+  x_edge_var.assign(n, vector<int>(n, 0));
+  vector<int> conversion_trackers;
 
-        // X[idxX(i,j)] = 1 if traffic can go from i to j, 0 otherwise
-        X = IloNumVarArray(env, n * n, 0, 1, ILOBOOL);
-        // D Tracks the steps of Floyd-Warshall inside the LP solver
-        D = IloNumVarArray(env, (n + 1) * n * n, 0, BIG_M * 2, ILOFLOAT);
+  // setup variables for original 2-way streets
+  for (size_t idx = 0; idx < two_way_streets.size(); ++idx) {
+    int u = two_way_streets[idx].first;
+    int v = two_way_streets[idx].second;
+    x_edge_var[u][v] = ++n_vars;
+    x_edge_var[v][u] = ++n_vars;
 
-        IloExpr obj_expr(env);
-        IloNumVarArray conv_flags(env);
+    // can't drop both directions
+    add_clause(get_lit(x_edge_var[u][v]) V get_lit(x_edge_var[v][u]));
 
-        // Find existing two-way streets and set up variables to track which ones get converted
-        for (int i = 0; i < n; ++i) {
-            for (int j = i + 1; j < n; ++j) {
-                if (t_matrix[i][j] > 0 && t_matrix[j][i] > 0) {
-                    IloNumVar c_ij(env, 0, 1, ILOBOOL);
-                    conv_flags.add(c_ij);
-                    
-                    // Linear constraints to force c_ij to be 1 only if the street becomes one-way (it is a XOR implemented in a mathematical way)
-                    model.add(c_ij <= 2 - X[idxX(i, j)] - X[idxX(j, i)]);
-                    model.add(c_ij >= X[idxX(i, j)] - X[idxX(j, i)]);
-                    model.add(c_ij >= X[idxX(j, i)] - X[idxX(i, j)]);
-                    
-                    obj_expr += c_ij;
-                }
-            }
-        }
-        // Objective function: maximize the total number of converted streets
-        model.add(IloMaximize(env, obj_expr));
-        obj_expr.end();
+    // xor logic to check if a street became 1-way
+    int c = ++n_vars;
+    conversion_trackers.push_back(c);
+    int a = x_edge_var[u][v], b = x_edge_var[v][u];
+    add_clause(get_lit(a) V get_lit(b) V -get_lit(c));
+    add_clause(get_lit(a) V -get_lit(b) V get_lit(c));
+    add_clause(-get_lit(a) V get_lit(b) V get_lit(c));
+    add_clause(-get_lit(a) V -get_lit(b) V -get_lit(c));
+  }
 
-        // Enforce constraints on the street direction variables
-        for (int i = 0; i < n; ++i) {
-            for (int j = 0; j < n; ++j) {
-                if (t_matrix[i][j] == -1) {
-                    // No street exists physically
-                    model.add(X[idxX(i, j)] == 0);
-                }
-                else if (t_matrix[j][i] == -1) {
-                    // Already a fixed one-way street, cannot be flipped or altered
-                    model.add(X[idxX(i, j)] == 1);
-                }
-                else if (i < j) {
-                    // Two-way streets must retain at least one direction open
-                    model.add(X[idxX(i, j)] + X[idxX(j, i)] >= 1);
-                }
-            }
-        }
+  // reach_var[i][j][d] means j is reachable from i in <= d steps
+  reach_var.assign(n, vector<vector<int> >(n, vector<int>(max_allowed_dist + 1, 0)));
+  for (int i = 0; i < n; ++i)
+    for (int j = 0; j < n; ++j)
+      for (int d = 0; d <= max_allowed_dist; ++d)
+        reach_var[i][j][d] = ++n_vars;
 
-        // Initialize the base distances layer (k=0) for the embedded Floyd-Warshall model
-        for (int i = 0; i < n; ++i) {
-            for (int j = 0; j < n; ++j) {
-                int base_idx = idxD(0, i, j);
-                if (i == j) {
-                    model.add(D[base_idx] == 0);
-                }
-                else if (t_matrix[i][j] == -1) {
-                    model.add(D[base_idx] == BIG_M);
-                }
-                else {
-                    // Big-M formulation to link shortest distance to the direction choice variable X
-                    model.add(D[base_idx] >= t_matrix[i][j]);
-                    model.add(D[base_idx] >= BIG_M * (1 - X[idxX(i, j)]));
-                    model.add(D[base_idx] <= t_matrix[i][j] + (BIG_M - t_matrix[i][j]) * (1 - X[idxX(i, j)]));
-                }
-            }
-        }
+  // base case for d = 0
+  for (int i = 0; i < n; ++i)
+    for (int j = 0; j < n; ++j)
+      if (i == j) add_clause(get_lit(reach_var[i][j][0]));
+      else        add_clause(-get_lit(reach_var[i][j][0]));
 
-        // Iterative Floyd-Warshall step: D[k+1][i][j] = min(D[k][i][j], D[k][i][k] + D[k][k][j])
+  // induction steps for reachability propagation
+  for (int i = 0; i < n; ++i) {
+    for (int d = 1; d <= max_allowed_dist; ++d) {
+      for (int j = 0; j < n; ++j) {
+        int cur_reach  = reach_var[i][j][d];
+        int prev_reach = reach_var[i][j][d-1];
+
+        add_clause(-get_lit(prev_reach) V get_lit(cur_reach));
+
+        clause eq = -get_lit(cur_reach) V get_lit(prev_reach);
         for (int k = 0; k < n; ++k) {
-            for (int i = 0; i < n; ++i) {
-                for (int j = 0; j < n; ++j) {
-                    int cur = idxD(k + 1, i, j);
-                    int prev = idxD(k, i, j);
-                    int ik = idxD(k, i, k);
-                    int kj = idxD(k, k, j);
+          if (t_matrix[k][j] > 0 && d >= t_matrix[k][j]) {
+            int pd  = d - t_matrix[k][j];
+            int nbr = reach_var[i][k][pd];
+            if (t_matrix[j][k] > 0) {
+              add_clause(-get_lit(nbr) V -get_lit(x_edge_var[k][j]) V get_lit(cur_reach)); // check if the edge is actually selected
 
-                    if (i == j) {
-                        model.add(D[cur] == 0);
-                        continue;
-                    }
-                    if (i == k || k == j) {
-                        model.add(D[cur] == D[prev]);
-                        continue;
-                    }
-
-                    // Lower bounds for the min operation
-                    model.add(D[cur] <= D[prev]);
-                    model.add(D[cur] <= D[ik] + D[kj]);
-
-                    // Binary selector variable to linearize the upper bound of the min() condition
-                    IloNumVar selector_w(env, 0, 1, ILOBOOL);
-                    model.add(D[cur] >= D[prev] - (BIG_M * 2) * selector_w);
-                    model.add(D[cur] >= (D[ik] + D[kj]) - (BIG_M * 2) * (1 - selector_w));
-                }
+              int trans = ++n_vars;
+              add_clause(-get_lit(trans) V get_lit(nbr));
+              add_clause(-get_lit(trans) V get_lit(x_edge_var[k][j]));
+              add_clause(get_lit(trans) V -get_lit(nbr) V -get_lit(x_edge_var[k][j]));
+              eq = eq V get_lit(trans);
+            } else {
+              add_clause(-get_lit(nbr) V get_lit(cur_reach)); // fixed 1-way street is always available
+              eq = eq V get_lit(nbr);
             }
+          }
         }
-
-        // Enforce the maximum percentage-based distance increase limit specified by the user
-        for (int i = 0; i < n; ++i) {
-            for (int j = 0; j < n; ++j) {
-                if (i != j && d_init[i][j] < (int)INF) {
-                    int final_idx = idxD(n, i, j);
-                    model.add(D[final_idx] * 100.0 <= d_init[i][j] * (100 + p));
-                }
-            }
-        }
-
-        IloCplex cplex(model);
-        cplex.setOut(env.getNullStream()); //remove annoying logs
-        
-        if (!cplex.solve()) {
-            cerr << "Error: the model is infeasible with the current constraints setup." << endl;
-            env.end();
-            return 1;
-        }
-
-        // Print original input configuration back to standard output
-        cout << n << "\n";
-        for (int i = 0; i < n; ++i) {
-            for (int j = 0; j < n; ++j) {
-                cout << t_matrix[i][j];
-                if (j < n - 1) cout << " ";
-            }
-            cout << "\n";
-        }
-        cout << p << "\n";
-
-        // Print out every two-way street that has successfully been changeed to one-way
-        for (int i = 0; i < n; ++i) {
-            for (int j = i + 1; j < n; ++j) {
-                if (t_matrix[i][j] > 0 && t_matrix[j][i] > 0) {
-                    int val_ij = IloRound(cplex.getValue(X[idxX(i, j)]));
-                    int val_ji = IloRound(cplex.getValue(X[idxX(j, i)]));
-                    if (val_ij == 1 && val_ji == 0) {
-                        cout << i << " " << j << "\n";
-                    } else if (val_ji == 1 && val_ij == 0) {
-                        cout << j << " " << i << "\n";
-                    }
-                }
-            }
-        }
-
-        // Print total count of converted streets
-        cout << IloRound(cplex.getObjValue()) << "\n";
-
-    } catch (IloException& e) {
-        cerr << "CPLEX expection " << e << endl;
-        env.end();
-        return 1;
-    } catch (...) {
-        cerr << "Unknown exception" << endl;
-        env.end();
-        return 1;
+        add_clause(eq);
+      }
     }
+  }
 
-    env.end();
-    return 0;
+  // constraints based on threshold percentage p
+  for (int i = 0; i < n; ++i) {
+    for (int j = 0; j < n; ++j) {
+      if (i != j && d_init[i][j] < INF) {
+        int limit = min((d_init[i][j] * (100 + p)) / 100, max_allowed_dist);
+        add_clause(get_lit(reach_var[i][j][limit]));
+      }
+    }
+  }
+
+  encode_at_least_k(conversion_trackers, target_conversions);
+
+  // print header at the very end so tac can flip it to the top
+  cnf << "p cnf " << n_vars << " " << n_clauses << endl;
+}
+
+vector<int> sat_assignment;
+
+// parseing values from kissat output 
+void get_solution() {
+  int lit;
+  sat_assignment.assign(n_vars + 1, 0);
+  while (sol >> lit) {
+    if (lit > 0)  sat_assignment[lit] = 1;
+    else          sat_assignment[-lit] = -1;
+  }
+}
+
+// format output following the statement instructions
+void write_solution() {
+  cout << n << endl;
+  for (int i = 0; i < n; ++i) {
+    for (int j = 0; j < n; ++j) {
+      cout << t_matrix[i][j];
+      if (j < n - 1) cout << " ";
+    }
+    cout << endl;
+  }
+  cout << p << endl;
+
+  int converted_count = 0;
+  vector<pair<int,int> > converted_streets;
+  for (size_t idx = 0; idx < two_way_streets.size(); ++idx) {
+    int u = two_way_streets[idx].first;
+    int v = two_way_streets[idx].second;
+    int var_uv = x_edge_var[u][v];
+    int var_vu = x_edge_var[v][u];
+    
+    bool active_uv = (sat_assignment[var_uv] == 1);
+    bool active_vu = (sat_assignment[var_vu] == 1);
+
+    if (active_uv && !active_vu) {
+      converted_streets.push_back(make_pair(u, v));
+      converted_count++;
+    } else if (!active_uv && active_vu) {
+      converted_streets.push_back(make_pair(v, u));
+      converted_count++;
+    }
+  }
+  
+  for (size_t idx = 0; idx < converted_streets.size(); ++idx)
+    cout << converted_streets[idx].first << " " << converted_streets[idx].second << endl;
+  
+  cout << converted_count << endl;
+}
+
+//main 
+int main(int argc, char** argv) {
+  istream* input_stream = &cin;
+  ifstream infile;
+  if (argc == 2) {
+    infile.open(argv[1]);
+    if (infile) input_stream = &infile;
+  }
+
+  if (!(*input_stream >> n)) return 0;
+  t_matrix.assign(n, vector<int>(n));
+  for (int i = 0; i < n; ++i)
+    for (int j = 0; j < n; ++j)
+      *input_stream >> t_matrix[i][j];
+  *input_stream >> p;
+  if (infile.is_open()) infile.close();
+
+  // find all original 2-way streets
+  for (int i = 0; i < n; ++i)
+    for (int j = i + 1; j < n; ++j)
+      if (t_matrix[i][j] > 0 && t_matrix[j][i] > 0)
+        two_way_streets.push_back(make_pair(i, j));
+
+  compute_initial_distances();
+
+  // calculate global upper bound for distances
+  for (int i = 0; i < n; ++i) {
+    for (int j = 0; j < n; ++j) {
+      if (i != j && d_init[i][j] < INF) {
+        int md = (d_init[i][j] * (100 + p)) / 100;
+        if (md > max_allowed_dist) max_allowed_dist = md;
+      }
+    }
+  }
+
+  int max_possible_conversions = (int)two_way_streets.size();
+
+  // linear search from max possible conversions down to 0
+  for (int target = max_possible_conversions; target >= 0; --target) {
+    cnf.open("tmp.rev");
+    write_CNF_with_target(target);
+    cnf.close();
+
+    // run solver with tac 
+    int status = system("tac tmp.rev | ./kissat/build/kissat | grep -E -v \"^c|^s\" | cut --delimiter=' ' --field=1 --complement > tmp.out");
+    (void)status;
+
+    ifstream check_sol("tmp.out");
+    string tok;
+    bool is_sat = (bool)(check_sol >> tok);
+    check_sol.close();
+    if (is_sat) break;
+  }
+
+  sol.open("tmp.out");
+  get_solution();
+  sol.close();
+  
+  write_solution();
+
+  int clean_status = system("rm -f tmp.rev tmp.out");
+  (void)clean_status;
+  return 0;
 }
