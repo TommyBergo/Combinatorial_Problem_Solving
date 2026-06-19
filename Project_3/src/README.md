@@ -18,7 +18,7 @@ The project is organized as follows:
 ```
   - `run_checks.sh`: A script to verify each output file in the `out/` directory using the provided checker.
 ```bash
-    ./run_checks.sh <checker_executable> <output_dir>
+    ./run_checks.sh <checker> <output_dir>
 ```
   - `checker.cc`: The sanity check utility provided by the professor.
 - **Report.pdf**: A written report of this project.
@@ -28,3 +28,4 @@ To compile the solver, the main program, and the checker, navigate to the `src` 
 
 ```bash
 make
+```
