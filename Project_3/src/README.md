@@ -15,11 +15,11 @@ The project is organized as follows:
   - `run_all.sh`: A bash script that runs the `program` executable over all files in a directory to produce output files.
 ```bash
     ./run_all.sh <input_dir> <solver> <output_dir>
-    ```
+```
   - `run_checks.sh`: A script to verify each output file in the `out/` directory using the provided checker.
 ```bash
     ./run_checks.sh <checker_executable> <output_dir>
-    ```
+```
   - `checker.cc`: The sanity check utility provided by the professor.
 - **Report.pdf**: A written report of this project.
 
