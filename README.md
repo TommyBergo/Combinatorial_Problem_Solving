@@ -1,4 +1,4 @@
-# Combinatorial Problem Solving - Universitat Politecnica de Catalunya - 
+# Combinatorial Problem Solving - Universitat Politecnica de Catalunya 
 ## Street Directionality Problem
 ### Tommaso Bergonzoni
 
